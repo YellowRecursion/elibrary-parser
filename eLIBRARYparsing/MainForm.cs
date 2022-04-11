@@ -58,11 +58,11 @@ namespace eLIBRARYparsing
             get
             {
                 if (IsCellEmpty(_statusOffset)) return WorkStatus.NotProcessed;
-                return (WorkStatus)(int)GetCellValue(_statusOffset);
+                return (WorkStatus)int.Parse(GetCellValue(_statusOffset).ToString());
             }
             set
             {
-                SetCellValue(_statusOffset, value);
+                SetCellValue(_statusOffset, (int)value);
             }
         }
         public int AuthorPage
@@ -70,7 +70,7 @@ namespace eLIBRARYparsing
             get
             {
                 if (IsCellEmpty(_pageOffset)) return 1;
-                return (int)GetCellValue(_pageOffset);
+                return int.Parse(GetCellValue(_pageOffset).ToString());
             }
             set
             {
@@ -82,7 +82,7 @@ namespace eLIBRARYparsing
             get
             {
                 if (IsCellEmpty(_articleNumberOffset)) return 0;
-                return (int)GetCellValue(_articleNumberOffset);
+                return int.Parse(GetCellValue(_articleNumberOffset).ToString());
             }
             set
             {
@@ -125,42 +125,90 @@ namespace eLIBRARYparsing
 
 
 
-        // START
+        // START AND STOP
         private void StartButton_Click(object sender, EventArgs e)
         {
+            if (!File.Exists(_workFilePath))
+            {
+                Print("Unable to start work. Choose the correct file path");
+                return;
+            }
+
             CreateAndSelectOutputDirectory();
-            Start();
+            StartOrStop();
         }
-        private void Start()
+        private void StartOrStop()
         {
             if (!_isStarted)
             {
-                // START
-
-                selectInputPathButton.Enabled = false;
-                startButton.Text = "Stop";
-                _workThread = new Thread(Main);
-                _workThread.SetApartmentState(ApartmentState.STA);
-                _workThread.IsBackground = true;
-                _workThread.Start();
-                Print("Starting...");
+                StartWork();
             }
             else
             {
-                // STOP
+                StopWork();
+            }
+        }
+        private void StartWork()
+        {
+            if (_isStarted) return;
 
-                selectInputPathButton.Enabled = true;
-                startButton.Text = "Start";
-                if (_workThread.IsAlive)
-                {
-                    _workThread.Abort();
-                    _workThread.Interrupt();
-                }
-                Print("Stoping...");
-                _workBook.Close();
+            _isStarted = true;
+
+            logs.Clear();
+
+            _excelApp = new Excel.Application();
+            _workThread = new Thread(Main);
+            _workThread.SetApartmentState(ApartmentState.STA);
+            _workThread.IsBackground = true;
+            _workThread.Start();
+
+            RefreshUI();
+            Print("START");
+        }
+        private void StopWork()
+        {
+            if (!_isStarted) return;
+
+            _isStarted = false;
+
+            if (_driver != null)
+            {
+                _driver.Close();
+                _driver.Quit();
+                _driver = null;
+            } 
+
+            if (_workBook != null)
+            {
+                _workBook.Save();
+                _workBook.Close(true);
+                _excelApp.Quit();
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(_excelApp);
             }
 
-            _isStarted = !_isStarted;
+            RefreshUI();
+            Print("STOP");
+
+            if (_workThread.IsAlive)
+            {
+                _workThread.Abort();
+            }
+        }
+        private void RefreshUI()
+        {
+            logs.Invoke(new Action(() =>
+            {
+                if (_isStarted)
+                {
+                    startButton.Text = "Stop";
+                    selectInputPathButton.Enabled = false;
+                }
+                else
+                {
+                    startButton.Text = "Start";
+                    selectInputPathButton.Enabled = true;
+                }
+            }));
         }
 
 
@@ -178,7 +226,7 @@ namespace eLIBRARYparsing
 
             WaitForPassRobotTest();
         }
-        private void AuthrizeOnElibrary()
+        private void AuthorizeOnElibrary()
         {
             if (_driver.Url != URL_ELIBRARY) _driver.Url = URL_ELIBRARY;
 
@@ -200,7 +248,7 @@ namespace eLIBRARYparsing
 
             while (!IsCellEmpty(_namesOffset))
             {
-                Print($"{_currentDataIndex + 1}) {AuthorName}");
+                Print($"\n{_currentDataIndex + 1}) {AuthorName}");
 
                 switch (AuthorWorkStatus)
                 {
@@ -208,12 +256,30 @@ namespace eLIBRARYparsing
                         Print("OK");
                         break;
                     default:
-                        Work();
+                        try
+                        {
+                            Work();
+                        }
+                        catch (ThreadAbortException)
+                        {
+                            Print("ThreadAbortException");
+                            StopWork();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Beep();
+                            Print("The program ended abruptly!");
+                            Print(ex.Message);
+                            StopWork();
+                        }
                         break;
                 }
+
+                _currentDataIndex++;
             }
 
             Print("Сompleted!");
+            StopWork();
         }
         private void Work()
         {
@@ -269,9 +335,11 @@ namespace eLIBRARYparsing
 
                 SleepInaccurateTime(2000);
 
-                var articles = _driver.FindElements(By.TagName(".//table[@id='restab']//tr[@valign='middle'][@id]")).ToArray();
+                var articles = _driver.FindElements(By.XPath(".//table[@id='restab']//tr[@valign='middle'][@id]")).ToArray();
 
-                if (articles.Length == 0)
+                int countOfArticles = articles.Length;
+
+                if (countOfArticles == 0)
                 {
                     Print("OK");
                     AuthorWorkStatus = WorkStatus.OK;
@@ -280,12 +348,12 @@ namespace eLIBRARYparsing
 
                 Print($"Page: {AuthorPage}");
 
-                for (int i = AuthorArticleNumber; i < articles.Length; i++)
+                for (int i = AuthorArticleNumber; i < countOfArticles; i++)
                 {
-                    Print($"Article: {i} / {articles.Length}");
+                    Print($"Article: {i + 1} / {countOfArticles}");
 
                     // Click 
-                    articles[i].FindElement(By.XPath("//a[@href]")).Click();
+                    articles[i].FindElement(By.XPath("./td[2]//a[@href]")).Click();
 
                     WaitForPassRobotTest();
 
@@ -293,9 +361,9 @@ namespace eLIBRARYparsing
                     {
                         SleepInaccurateTime(3000);
 
-                        ProcessArticle();
+                        WaitForPassRobotTest();
 
-                        Print("OK");
+                        ProcessArticle();
                     }
                     else
                     {
@@ -305,7 +373,7 @@ namespace eLIBRARYparsing
                     // Back to articles page
                     _driver.Navigate().Back();
                     SleepInaccurateTime(2000);
-                    articles = _driver.FindElements(By.TagName(".//table[@id='restab']//tr[@valign='middle'][@id]")).ToArray();
+                    articles = _driver.FindElements(By.XPath(".//table[@id='restab']//tr[@valign='middle'][@id]")).ToArray();
 
                     AuthorArticleNumber = i;
                 }
@@ -321,18 +389,18 @@ namespace eLIBRARYparsing
 
             WaitForPassRobotTest();
 
-            SleepInaccurateTime(4000);
+            SleepInaccurateTime(3000);
 
             var element = _driver.FindElement(By.XPath(@".//input[@id='surname']"));
             element.Clear();
             element.SendKeys(AuthorName);
 
-            SleepInaccurateTime(1500);
+            SleepInaccurateTime(1000);
 
             element = _driver.FindElement(By.XPath(@".//select[@name='town']"));
             element.SendKeys(AuthorCity);
 
-            SleepInaccurateTime(1500);
+            SleepInaccurateTime(1000);
 
             IJavaScriptExecutor js = _driver as IJavaScriptExecutor;
             js.ExecuteScript("author_search()");
@@ -370,6 +438,11 @@ namespace eLIBRARYparsing
             // Article annotation
             if (WebElementExists(By.XPath(".//table[@width='550'][@cellpadding='3'][contains(., 'АННОТАЦИЯ:')]//tr[2]"), out webElement))
             {
+                if (WebElementExists(By.XPath(".//table[@width='550'][@cellpadding='3'][contains(., 'АННОТАЦИЯ:')]//tr[2]//a"), out var showFull))
+                {
+                    showFull.Click();
+                    Thread.Sleep(1000);
+                }
                 textFile.WriteLine(webElement.Text);
                 Print("- аннотация: +");
             }
@@ -395,10 +468,23 @@ namespace eLIBRARYparsing
         }
         private void WaitForPassRobotTest()
         {
+            if (WebElementExists(By.XPath(".//div[@class='midtext'][contains(., 'С Вашего IP-адреса')]")))
+            {
+                Print("! Please past the robot test");
+                Print("Wait for passing robot test...");
+                Console.Beep();
+            }
+            else
+            {
+                return;
+            }
+
             while (WebElementExists(By.XPath(".//div[@class='midtext'][contains(., 'С Вашего IP-адреса')]")))
             {
                 Thread.Sleep(3000);
             }
+
+            Print("Robot test is passed!");
         }
 
 
@@ -406,8 +492,7 @@ namespace eLIBRARYparsing
         // FINISH WORK
         private void MainForm_FormClosed(object sender, FormClosedEventArgs e)
         {
-            if (_workBook != null)
-                _workBook.Close();
+            StopWork();
         }
 
 
@@ -431,11 +516,11 @@ namespace eLIBRARYparsing
         }
         private void SetCellValue(Vector2Int offset, int index, object value)
         {
-            _workSheet.Cells[index + offset.Y, offset.X].Text = value;
+            _workSheet.Cells[index + offset.Y, offset.X] = value;
         }
         private void SetCellValue(Vector2Int offset, object value)
         {
-            _workSheet.Cells[_currentDataIndex + offset.Y, offset.X].Text = value;
+            _workSheet.Cells[_currentDataIndex + offset.Y, offset.X] = value;
         }
 
 
