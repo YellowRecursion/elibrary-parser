@@ -5,7 +5,6 @@ This program will help to collect information about authors from an open electro
 
 Such information is collected as:
 - name
-- abstract
 - keywords
-- description
+- abstract
 - UDC
